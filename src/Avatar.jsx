@@ -1,114 +1,109 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { useFrame } from '@react-three/fiber';
-import { useGLTF, useAnimations, Center } from '@react-three/drei';
-import * as THREE from 'three'; // WAJIB TAMBAHKAN INI
+import { useFrame, useThree } from '@react-three/fiber';
+import { useGLTF, useAnimations } from '@react-three/drei'; // Center dihapus
+import * as THREE from 'three';
 
-export function Avatar({ audioUrl, isPlaying }) {
+// Pastikan menerima prop 'position' agar bisa diturunkan sejajar lantai
+export function Avatar({ audioUrl, isPlaying, position }) {
   const { scene, animations } = useGLTF('/idle_Theresa.glb');
   const { actions } = useAnimations(animations, scene);
   
   const groupRef = useRef();
-  const analyzer = useRef(null);
-  const audioContext = useRef(null);
+
+  // Reference untuk tulang leher dan kepala (Head Tracking)
+  const headBone = useRef();
+  const neckBone = useRef();
   
-  // Buat state audio dengan setting crossOrigin
   const [audioElement] = useState(() => {
     const audio = new Audio();
-    audio.crossOrigin = "anonymous"; // WAJIB untuk Web Audio API dari beda port
+    audio.crossOrigin = "anonymous"; 
     return audio;
   });
 
-  // --- PERBAIKAN MATERIAL TRANSPARAN (DOUBLE SIDE) ---
+  // 1. --- PEMUTARAN ANIMASI (Hanya dipanggil sekali) ---
+  useEffect(() => {
+    if (actions) {
+      const animNames = Object.keys(actions);
+      if (animNames.length > 0) {
+        actions[animNames[0]].reset().fadeIn(0.5).play();
+      }
+    }
+  }, [actions]);
+
+  // 2. --- TRAVERSAL: PERBAIKAN MATERIAL & PENCARIAN TULANG ---
   useEffect(() => {
     if (scene) {
       scene.traverse((child) => {
-        if (child.isMesh && child.material) {
-          
-          // Buat fungsi kecil agar rapi
-          const fixMaterial = (mat) => {
-            mat.side = THREE.DoubleSide; // Jaga-jaga untuk masalah dua sisi
-            
-            // PAKSA MATIKAN TRANSPARANSI (Ini biang kerok aslinya)
-            mat.transparent = false; 
-            mat.depthWrite = true;
-            mat.alphaTest = 0.5; 
-            
-            mat.needsUpdate = true;
-          };
+        if (child.isMesh) {
+          child.castShadow = true;    
+          child.receiveShadow = true; 
 
-          if (Array.isArray(child.material)) {
-            child.material.forEach(fixMaterial);
-          } else {
-            fixMaterial(child.material);
+          if (child.material) {
+            const fixMaterial = (mat) => {
+              mat.side = THREE.DoubleSide; 
+              mat.transparent = false; 
+              mat.depthWrite = true;
+              mat.alphaTest = 0.5; 
+              mat.needsUpdate = true;
+            };
+
+            if (Array.isArray(child.material)) {
+              child.material.forEach(fixMaterial);
+            } else {
+              fixMaterial(child.material);
+            }
+          }
+        }
+
+        if (child.isBone) {
+          const boneName = child.name.toLowerCase();
+          if (boneName.includes('head')) {
+            headBone.current = child;
+          } else if (boneName.includes('neck')) {
+            neckBone.current = child;
           }
         }
       });
     }
   }, [scene]);
-  // ----------------------------------------------------
 
+  // 3. --- PEMUTARAN AUDIO (Lebih Sederhana Tanpa Lip-Sync) ---
   useEffect(() => {
     if (isPlaying && audioUrl) {
-      // Setup AudioContext HANYA sekali
-      if (!audioContext.current) {
-        audioContext.current = new (window.AudioContext || window.webkitAudioContext)();
-        analyzer.current = audioContext.current.createAnalyser();
-        analyzer.current.fftSize = 256; // Presisi analisis
-        
-        // Buat source dan sambungkan (Hanya lakukan sekali)
-        const source = audioContext.current.createMediaElementSource(audioElement);
-        source.connect(analyzer.current);
-        analyzer.current.connect(audioContext.current.destination);
-      }
-
-      // Resume context jika ter-suspend oleh browser
-      if (audioContext.current.state === 'suspended') {
-        audioContext.current.resume();
-      }
-
       audioElement.src = audioUrl;
       audioElement.play().catch(e => console.error("Gagal putar audio:", e));
-
     } else {
-      // Pause audio jika isPlaying false
       audioElement.pause();
     }
 
-    // Cleanup: Jangan close AudioContext, cukup pause audionya saja
-    // karena kita ingin menggunakannya lagi di pesan berikutnya
     return () => {
       audioElement.pause();
     };
   }, [isPlaying, audioUrl, audioElement]);
 
-  useFrame(() => {
-    // Animasi bawaan jalan terus
-    if (actions) {
-      const animNames = Object.keys(actions);
-      if (animNames.length > 0) actions[animNames[0]].play();
-    }
+  // 4. --- RENDER LOOP: HANYA HEAD TRACKING ---
+  useFrame((state) => {
+    
+    // HEAD TRACKING: Kepala mengikuti mouse
+    if (headBone.current && neckBone.current) {
+      const maxRotationY = Math.PI * 0.25; 
+      const maxRotationX = Math.PI * 0.15; 
+      const headScreenOffsetY = 0.5; 
 
-    // FAKE LIP-SYNC: Skala berdenyut mengikuti suara
-    if (isPlaying && analyzer.current && groupRef.current) {
-      const data = new Uint8Array(analyzer.current.frequencyBinCount);
-      analyzer.current.getByteFrequencyData(data);
+      const targetRotationY = state.mouse.x * maxRotationY;
+      const targetRotationX = -(state.mouse.y - headScreenOffsetY) * maxRotationX; 
+
+      headBone.current.rotation.y = THREE.MathUtils.lerp(headBone.current.rotation.y, targetRotationY, 0.1);
+      headBone.current.rotation.x = THREE.MathUtils.lerp(headBone.current.rotation.x, targetRotationX, 0.1);
       
-      const volume = data.reduce((a, b) => a + b, 0) / data.length;
-      
-      // Jika volume 0, pulse = 1 (normal). Jika keras, pulse membesar.
-      const pulse = 1 + (volume / 150); 
-      groupRef.current.scale.set(pulse, pulse, pulse);
-      
-      groupRef.current.rotation.y += (Math.random() - 0.5) * (volume / 500);
-    } else if (groupRef.current) {
-      // Animasi lerp agar kembali ke bentuk asal secara halus saat suara berhenti
-      groupRef.current.scale.lerp({ x: 1, y: 1, z: 1 }, 0.1);
+      neckBone.current.rotation.y = THREE.MathUtils.lerp(neckBone.current.rotation.y, targetRotationY * 0.5, 0.1);
     }
   });
 
   return (
-    <Center>
-      <primitive ref={groupRef} object={scene} />
-    </Center>
+    // Gunakan <group position={position}> BUKAN <Center>
+    <group position={position}>
+      <primitive ref={groupRef} object={scene} castShadow receiveShadow />
+    </group>
   );
 }
