@@ -40,3 +40,27 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 dist/
 lib/
 piper_amd64.tar.gz
+
+
+# Dependency Node.js
+node_modules/
+
+# Folder Model AI (Ukurannya terlalu besar untuk GitHub biasa)
+models/
+
+# Folder Binary/Executable (Piper & Whisper)
+bin/
+
+# File Arsip & Kompresi
+*.tar.gz
+*.zip
+
+# Folder Upload (Kecualikan isinya, tapi pertahankan foldernya)
+uploads/*
+!uploads/.gitkeep
+
+# File Audio yang di-generate AI di folder public
+public/*.wav
+
+# Environment variables (Jika nanti kamu pakai .env)
+.env
